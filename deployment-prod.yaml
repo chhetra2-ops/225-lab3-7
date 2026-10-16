@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: prod-deployment
 spec:
-  replicas: 1  # Number of NGINX pods to run
+  replicas: 1
   selector:
     matchLabels:
       app: nginx
@@ -14,22 +14,21 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: cithit/roseaw:latest                             #<----change this!
+        image: cithit/chhetra2:latest
         ports:
-        - containerPort: 80  # Expose NGINX on port 80      
+        - containerPort: 80
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: nginx
 spec:
-  rules: 
-  - host: 
-    http:
+  rules:
+  - http:
       paths:
       - path: /
         pathType: ImplementationSpecific
-        backend: 
+        backend:
           service:
             name: prod-service
             port:
@@ -40,11 +39,11 @@ kind: Service
 metadata:
   name: prod-service
 spec:
-  type: LoadBalancer 
-  loadBalancerIP: 10.48.229.45                                     # <-----change this!!!!
+  type: LoadBalancer
+  loadBalancerIP: 10.48.229.45
+  selector:
+    app: nginx
   ports:
   - protocol: TCP
     port: 80
     targetPort: 80
-  selector:
-    app: nginx 
