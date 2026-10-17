@@ -61,8 +61,6 @@ pipeline {
         stage('Deploy to Dev Environment') {
             steps {
                 script {
-                    def kubeConfig = readFile(KUBECONFIG)
-
                     sh """
                         sed -i 's|${DOCKER_IMAGE}:latest|${DOCKER_IMAGE}:${IMAGE_TAG}|' deployment-dev.yaml
                         kubectl apply -f deployment-dev.yaml
@@ -77,7 +75,7 @@ pipeline {
                     sh 'docker stop qa-tests || true'
                     sh 'docker rm qa-tests || true'
                     sh 'docker build -t qa-tests -f Dockerfile.test .'
-                    sh 'docker run qa-tests'
+                    sh 'docker run --rm qa-tests'
                 }
             }
         }
@@ -88,9 +86,9 @@ pipeline {
 
                 sh '''
                     docker run --user $(id -u) \
-                    -v ${WORKSPACE}:${WORKSPACE}:rw \
-                    -e BURP_START_URL=http://10.48.229.158 \
-                    -e BURP_REPORT_FILE_PATH=${WORKSPACE}/dastardly-report.xml \
+                    -v "${WORKSPACE}:${WORKSPACE}:rw" \
+                    -e BURP_START_URL=http://10.48.229.167 \
+                    -e BURP_REPORT_FILE_PATH="${WORKSPACE}/dastardly-report.xml" \
                     public.ecr.aws/portswigger/dastardly:latest
                 '''
             }
@@ -119,22 +117,29 @@ pipeline {
     post {
         always {
             junit testResults: 'dastardly-report.xml',
+                allowEmptyResults: true,
                 skipPublishingChecks: true
         }
 
         success {
-            slackSend color: 'good',
+            slackSend(
+                color: 'good',
                 message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            )
         }
 
         unstable {
-            slackSend color: 'warning',
+            slackSend(
+                color: 'warning',
                 message: "Build Unstable: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            )
         }
 
         failure {
-            slackSend color: 'danger',
+            slackSend(
+                color: 'danger',
                 message: "Build Failed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+            )
         }
     }
 }
