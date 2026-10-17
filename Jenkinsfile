@@ -77,6 +77,9 @@ pipeline {
         stage('Run Security Checks (Dastardly)') {
             steps {
                 sh '''
+                    touch "$WORKSPACE/dastardly-report.xml"
+                    chmod 666 "$WORKSPACE/dastardly-report.xml"
+
                     docker run --rm \
                         -e BURP_START_URL="${BURP_START_URL}" \
                         -e BURP_REPORT_FILE_PATH=/mnt/dastardly-report.xml \
