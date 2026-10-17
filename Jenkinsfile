@@ -11,77 +11,51 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                cleanWs()
                 checkout scm
             }
         }
 
         stage('Lint HTML') {
             steps {
-                sh '''
-                    npm install --no-save --package-lock=false htmlhint
-                    npx htmlhint index.html
-                '''
+                sh 'docker run --rm -v "$WORKSPACE":/work -w /work cytopia/htmlhint .'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    docker.withRegistry(
-                        'https://index.docker.io/v1/',
-                        DOCKER_CREDENTIALS
-                    ) {
-                        docker.build(
-                            "${DOCKER_IMAGE}:${BUILD_NUMBER}",
-                            '-f Dockerfile.build .'
-                        )
-                    }
-                }
+                sh 'docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .'
+                sh 'docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest'
             }
         }
 
         stage('Push Docker Image') {
             steps {
-                script {
-                    docker.withRegistry(
-                        'https://index.docker.io/v1/',
-                        DOCKER_CREDENTIALS
-                    ) {
-                        docker.image(
-                            "${DOCKER_IMAGE}:${BUILD_NUMBER}"
-                        ).push()
-                    }
+                withCredentials([usernamePassword(
+                    credentialsId: "${DOCKER_CREDENTIALS}",
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        docker push ${DOCKER_IMAGE}:latest
+                    '''
                 }
             }
         }
 
         stage('Deploy to Dev Environment') {
             steps {
-                withCredentials([
-                    file(
-                        credentialsId: KUBE_CREDENTIALS,
-                        variable: 'KUBECONFIG'
-                    )
-                ]) {
+                withCredentials([file(
+                    credentialsId: "${KUBE_CREDENTIALS}",
+                    variable: 'KUBECONFIG'
+                )]) {
                     sh '''
-                        set -e
-
-                        sed -i "s|cithit/chhetra2:latest|${DOCKER_IMAGE}:${BUILD_NUMBER}|g" deployment-dev.yaml
-
-                        # Remove the old deployment so Kubernetes can
-                        # accept the updated immutable selector.
-                        kubectl delete deployment dev-deployment \
-                            --ignore-not-found=true
-
-                        # Remove the conflicting ingress named nginx.
-                        kubectl delete ingress nginx \
-                            --ignore-not-found=true
-
+                        sed -i "s|image: cithit/chhetra2:latest|image: ${DOCKER_IMAGE}:${BUILD_NUMBER}|g" deployment-dev.yaml
+                        kubectl delete deployment dev-deployment --ignore-not-found=true
+                        kubectl delete ingress nginx --ignore-not-found=true
                         kubectl apply -f deployment-dev.yaml
-
-                        kubectl rollout status deployment/dev-deployment \
-                            --timeout=120s
+                        kubectl rollout status deployment/dev-deployment --timeout=120s
                     '''
                 }
             }
@@ -89,25 +63,17 @@ pipeline {
 
         stage('Run Acceptance Tests') {
             steps {
-                sh '''
-                    docker stop qa-tests || true
-                    docker rm qa-tests || true
-
-                    docker build -t qa-tests -f Dockerfile.test .
-                    docker run --rm qa-tests
-                '''
+                sh 'python3 -m pytest -v'
             }
         }
 
-        stage('Run Security Checks') {
+        stage('Run Security Checks (Dastardly)') {
             steps {
                 sh '''
-                    docker pull public.ecr.aws/portswigger/dastardly:latest
-
                     docker run --rm \
                         -e BURP_START_URL="${BURP_START_URL}" \
-                        -e BURP_REPORT_FILE_PATH=/tmp/dastardly-report.xml \
-                        -v "${WORKSPACE}:/mnt" \
+                        -e BURP_REPORT_FILE_PATH=/mnt/dastardly-report.xml \
+                        -v "$WORKSPACE":/mnt \
                         public.ecr.aws/portswigger/dastardly:latest
                 '''
             }
@@ -115,20 +81,14 @@ pipeline {
 
         stage('Deploy to Prod Environment') {
             steps {
-                withCredentials([
-                    file(
-                        credentialsId: KUBE_CREDENTIALS,
-                        variable: 'KUBECONFIG'
-                    )
-                ]) {
+                withCredentials([file(
+                    credentialsId: "${KUBE_CREDENTIALS}",
+                    variable: 'KUBECONFIG'
+                )]) {
                     sh '''
-                        set -e
-
-                        sed -i "s|cithit/chhetra2:latest|${DOCKER_IMAGE}:${BUILD_NUMBER}|g" deployment-prod.yaml
-
+                        sed -i "s|image: cithit/chhetra2:latest|image: ${DOCKER_IMAGE}:${BUILD_NUMBER}|g" deployment-prod.yaml
                         kubectl apply -f deployment-prod.yaml
-                        kubectl rollout status deployment/prod-deployment \
-                            --timeout=120s
+                        kubectl rollout status deployment/prod-deployment --timeout=120s
                     '''
                 }
             }
@@ -136,15 +96,15 @@ pipeline {
 
         stage('Check Kubernetes Cluster') {
             steps {
-                withCredentials([
-                    file(
-                        credentialsId: KUBE_CREDENTIALS,
-                        variable: 'KUBECONFIG'
-                    )
-                ]) {
+                withCredentials([file(
+                    credentialsId: "${KUBE_CREDENTIALS}",
+                    variable: 'KUBECONFIG'
+                )]) {
                     sh '''
                         kubectl get all
                         kubectl get ingress
+                        kubectl describe service prod-service
+                        kubectl get events --sort-by=.lastTimestamp
                     '''
                 }
             }
@@ -162,22 +122,25 @@ pipeline {
 
         success {
             slackSend(
+                channel: '#builds',
                 color: 'good',
-                message: "Build Completed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+                message: "Build ${BUILD_NUMBER} succeeded: ${env.BUILD_URL}"
             )
         }
 
         unstable {
             slackSend(
+                channel: '#builds',
                 color: 'warning',
-                message: "Build Unstable: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+                message: "Build ${BUILD_NUMBER} is unstable: ${env.BUILD_URL}"
             )
         }
 
         failure {
             slackSend(
+                channel: '#builds',
                 color: 'danger',
-                message: "Build Failed: ${env.JOB_NAME} ${env.BUILD_NUMBER}"
+                message: "Build ${BUILD_NUMBER} failed: ${env.BUILD_URL}"
             )
         }
     }
