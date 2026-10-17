@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -17,7 +18,13 @@ pipeline {
 
         stage('Lint HTML') {
             steps {
-                sh 'docker run --rm -v "$WORKSPACE":/work -w /work cytopia/htmlhint .'
+                sh '''
+                    docker run --rm \
+                      -v "$WORKSPACE":/work \
+                      -w /work \
+                      node:20-alpine \
+                      sh -c "npx --yes htmlhint@1.1.4 index.html"
+                '''
             }
         }
 
